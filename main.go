@@ -1,13 +1,20 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"sort"
 	"sync"
 
 	"github.com/julienschmidt/httprouter"
+)
+
+const (
+	reddisDbIndex int = 0
 )
 
 type store struct {
@@ -16,21 +23,59 @@ type store struct {
 }
 
 var (
-	addr = flag.String("addr", ":8081", "http service address")
-	s    = store{
-		data: map[string]string{},
-		m:    sync.RWMutex{},
-	}
+	addr          = flag.String("addr", ":8081", "http service address")
+	generate      = flag.Bool("generate", false, "Regenerate Database")
+	listAvailable = flag.Bool("list-available", false, "List available Tokens")
+	listUsed      = flag.Bool("list-used", false, "List used Tokens")
+	db            Database
 )
 
 func main() {
-	flag.Parse()
 
+	db = NewDatabase(reddisDbIndex)
+
+	flag.Parse()
+	// ############################
+	// Parse Command Line Arguments
+	// ############################
+	if *generate {
+		err := generateTokens()
+		if err != nil {
+			fmt.Println(err.Error())
+			os.Exit(-1)
+		}
+		os.Exit(0)
+	}
+
+	if *listAvailable {
+		err := listAvailableTokens()
+		if err != nil {
+			fmt.Println(err.Error())
+			os.Exit(-1)
+		}
+		os.Exit(0)
+	}
+
+	if *listUsed {
+		err := listUsedTokens()
+		if err != nil {
+			fmt.Println(err.Error())
+			os.Exit(-1)
+		}
+		os.Exit(0)
+	}
+
+	// ############################
+	// Real Shit
+	// ############################
 	r := httprouter.New()
 
-	r.GET("/entry/:key", show)
-	r.GET("/list", show)
-	r.PUT("/entry/:key/:value", update)
+	r.GET("/register/:key/:name/:email", register)
+	//r.OPTIONS("/register/:key/:name/:email", register)
+	r.GET("/list", list)
+	//r.OPTIONS("/list", list)
+
+	fmt.Println("Starting server on: localhost" + *addr)
 
 	err := http.ListenAndServe(*addr, r)
 	if err != nil {
@@ -38,25 +83,214 @@ func main() {
 	}
 }
 
-func show(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+func generateTokens() error {
+	fmt.Println("Regenerating Database!")
 
-	k := p.ByName("key")
-	if k == "" {
-		s.m.RLock()
-		fmt.Fprintf(w, "Read list: %v", s.data)
-		s.m.RUnlock()
-		return
+	tokens := GenerateTokens("Hendrik", 0, 20)
+	for _, v := range tokens {
+		err := db.Insert(v)
+		if err != nil {
+			return err
+		}
 	}
-	s.m.RLock()
-	fmt.Fprintf(w, "Read entry: s.data[%s] = %s", k, s.data[k])
-	s.m.RUnlock()
+	return nil
 }
 
-func update(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+func listAvailableTokens() error {
+	tokens, _ := db.List()
+
+	var keys []int
+	var reorderedTokens = make(map[int]Token)
+
+	for _, v := range tokens {
+		if v.Valid {
+			keys = append(keys, v.Seed)
+			reorderedTokens[v.Seed] = v
+		}
+	}
+	sort.Ints(keys)
+
+	fmt.Printf("Used Tokens [%v]:\n", len(keys))
+
+	for _, key := range keys {
+		cur := reorderedTokens[key]
+		fmt.Printf("%08d  %s  %s\n", cur.Seed, cur.Hash, cur.Warrantor)
+	}
+
+	return nil
+}
+
+func listUsedTokens() error {
+	tokens, _ := db.List()
+
+	var keys []int
+	var reorderedTokens = make(map[int]Token)
+
+	for _, v := range tokens {
+		if !v.Valid {
+			keys = append(keys, v.Seed)
+			reorderedTokens[v.Seed] = v
+		}
+	}
+	sort.Ints(keys)
+
+	fmt.Printf("Used Tokens [%v]:\n", len(keys))
+
+	for _, key := range keys {
+		cur := reorderedTokens[key]
+		fmt.Printf("%08d  %s  %s -> %s <%s>\n", cur.Seed, cur.Hash, cur.Warrantor, cur.Applicant.Name, cur.Applicant.Email)
+	}
+
+	return nil
+}
+
+func list(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, Applicant")
+	w.Header().Set("Content-Type", "application/json")
+
+	if (*r).Method == "OPTIONS" {
+		return
+	}
+
+	tokens, _ := db.List()
+
+	var keys []int
+	var reorderedTokens = make(map[int]Token)
+
+	for _, v := range tokens {
+		if v.Valid {
+			keys = append(keys, v.Seed)
+			reorderedTokens[v.Seed] = v
+		}
+	}
+	sort.Ints(keys)
+
+	var resp []Token
+
+	for _, key := range keys {
+		cur := reorderedTokens[key]
+		resp = append(resp, cur)
+	}
+
+	jd, _ := json.Marshal(resp)
+
+	w.Write(jd)
+}
+
+func register(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+
+	type response struct {
+		success  bool   `json:"success"`
+		response string `json:"response"`
+	}
+
+	var jd []byte
+
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, Applicant")
+	w.Header().Set("Content-Type", "application/json")
+
+	if (*r).Method == "OPTIONS" {
+		return
+	}
+
 	k := p.ByName("key")
-	v := p.ByName("value")
-	s.m.Lock()
-	s.data[k] = v
-	s.m.Unlock()
-	fmt.Fprintf(w, "Updated: s.data[%s] = %s", k, v)
+	u := User{
+		Name:  p.ByName("name"),
+		Email: p.ByName("email"),
+	}
+
+	log.Printf("Register Attempt: name[%s], email[%s], token[%s]\n", u.Name, u.Email, k)
+	//var resp response
+
+	err := validateCredentials(u)
+	if err != nil {
+		log.Print(err.Error())
+
+		resp := response{
+			success:  false,
+			response: err.Error(),
+		}
+
+		jd, _ = json.Marshal(resp)
+		w.Write(jd)
+		return
+	}
+
+	err = tryRegister(u, k)
+	if err != nil {
+		log.Print(err.Error())
+
+		resp := response{
+			success:  false,
+			response: err.Error(),
+		}
+		jd, _ = json.Marshal(resp)
+		w.Write(jd)
+		return
+	}
+
+	// Success
+	//resp = response{
+	//	success:  true,
+	//	responce: "Sucessfully registered",
+	//}
+	//var resp []response
+	resppp := response{
+		success:  true,
+		response: "Tadaaaaa",
+	}
+
+	//resp = append(resp, tmp)
+
+	jd, err = json.Marshal(resppp)
+	if err != nil {
+		log.Println(err.Error())
+	}
+
+	fmt.Println(resppp)
+
+	w.Write(jd)
+	fmt.Println("Reached End!")
+}
+
+func tryRegister(u User, k string) error {
+
+	v, err := db.Query(k)
+	if err != nil {
+		return fmt.Errorf("Invalid Token: %s", k)
+	}
+
+	if !v.Valid {
+		return fmt.Errorf("Invalid Token: %s", k)
+	}
+
+	// Update: Is this attomic or could it be hacked?
+	v.Valid = false
+	v.Applicant = u
+
+	err = db.Insert(v)
+	if err != nil {
+		return fmt.Errorf("Invalid Token: %s", k)
+	}
+
+	return nil
+}
+
+func validateCredentials(u User) error {
+
+	users, err := db.Emails()
+	if err != nil {
+		return fmt.Errorf("Database connection down. Retry later")
+	}
+
+	if _, exists := users[u.Email]; exists {
+		return fmt.Errorf("Email address: %s is already in us", u.Email)
+	}
+
+	return nil
 }

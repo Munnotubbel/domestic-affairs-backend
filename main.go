@@ -23,11 +23,12 @@ type store struct {
 }
 
 var (
-	addr          = flag.String("addr", ":8081", "http service address")
-	generate      = flag.Bool("generate", false, "Regenerate Database")
-	listAvailable = flag.Bool("list-available", false, "List available Tokens")
-	listUsed      = flag.Bool("list-used", false, "List used Tokens")
-	db            Database
+	addr           = flag.String("addr", ":8081", "http service address")
+	generate       = flag.Bool("generate", false, "Regenerate Database")
+	listAvailable  = flag.Bool("list-available", false, "List available Tokens")
+	listUsed       = flag.Bool("list-used", false, "List used Tokens")
+	createInviteQR = flag.Bool("invite", false, "create invitation qr")
+	db             Database
 )
 
 func main() {
@@ -58,6 +59,15 @@ func main() {
 
 	if *listUsed {
 		err := listUsedTokens()
+		if err != nil {
+			fmt.Println(err.Error())
+			os.Exit(-1)
+		}
+		os.Exit(0)
+	}
+
+	if *createInviteQR {
+		err := WriteQrCode("http://127.0.0.1:8081/register/8ec7c043a478ec5d7604523f2ff6dac8e2f15d01fb55a4a7fed72b31368bb8f0/pascal+huerst/paso@domo.ch", "/tmp/da-invite.png")
 		if err != nil {
 			fmt.Println(err.Error())
 			os.Exit(-1)

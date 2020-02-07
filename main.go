@@ -70,10 +70,12 @@ func main() {
 	// ############################
 	r := httprouter.New()
 
-	r.GET("/register/:key/:name/:email", register)
-	//r.OPTIONS("/register/:key/:name/:email", register)
-	r.GET("/list", list)
-	//r.OPTIONS("/list", list)
+	// curl -X GET  "127.0.0.1:8081/register/8ec7c043a478ec5d7604523f2ff6dac8e2f15d01fb55a4a7fed72b31368bb8f0/pascal+huerst/paso@domo.ch"
+	r.GET("/register/:key/:name/:email", httpRegister)
+	// curl -X GET  "127.0.0.1:8081/list-available" | jq --color-output
+	r.GET("/list-available", httpListAvailable)
+	// curl -X GET  "127.0.0.1:8081/list-used" | jq --color-output
+	r.GET("/list-used", httpListUsed)
 
 	fmt.Println("Starting server on: localhost" + *addr)
 
@@ -144,7 +146,7 @@ func listUsedTokens() error {
 	return nil
 }
 
-func list(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+func httpListAvailable(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
@@ -180,7 +182,43 @@ func list(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	w.Write(jd)
 }
 
-func register(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+func httpListUsed(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, Applicant")
+	w.Header().Set("Content-Type", "application/json")
+
+	if (*r).Method == "OPTIONS" {
+		return
+	}
+
+	tokens, _ := db.List()
+
+	var keys []int
+	var reorderedTokens = make(map[int]Token)
+
+	for _, v := range tokens {
+		if !v.Valid {
+			keys = append(keys, v.Seed)
+			reorderedTokens[v.Seed] = v
+		}
+	}
+	sort.Ints(keys)
+
+	var resp []Token
+
+	for _, key := range keys {
+		cur := reorderedTokens[key]
+		resp = append(resp, cur)
+	}
+
+	jd, _ := json.Marshal(resp)
+
+	w.Write(jd)
+}
+
+func httpRegister(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 
 	type response struct {
 		success  bool   `json:"success"`
